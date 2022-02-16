@@ -1,0 +1,6 @@
+**/docs
+**/doc
+**/.DS_Store
+**/*.ini
+**/*.db
+**/*.nc
