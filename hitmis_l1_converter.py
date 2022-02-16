@@ -345,7 +345,7 @@ for key in main_flist.keys():
     for w in wls:
         fname = 'hitmis_st_%04d%02d%02d_%4d.nc' % (
             key.year, key.month, key.day, w * 10)
-        if fname in os.listdir('./'):
+        if fname in os.listdir(destdir):
             print('File %s exists' % (fname))
             continue
         tstart = datetime.datetime.now().timestamp()
