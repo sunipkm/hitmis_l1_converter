@@ -94,16 +94,17 @@ print('\n')
 st_date = start_date.date() - datetime.timedelta(days=1)
 lst_date = end_date.date() + datetime.timedelta(days=1)
 main_flist = {}
+all_files = []
 print('Dates with data: ', end = '')
 data_found = False
 first = True
 while st_date <= lst_date:
     _st_date = st_date
     start = datetime.datetime(
-        st_date.year, st_date.month, st_date.day, 12, 0, 0)
+        st_date.year, st_date.month, st_date.day, 20, 0, 0)
     st_date += datetime.timedelta(days=1)
     stop = datetime.datetime(
-        st_date.year, st_date.month, st_date.day, 11, 59, 59)
+        st_date.year, st_date.month, st_date.day, 3, 30, 00)
     start_ts = start.timestamp() * 1000
     stop_ts = stop.timestamp() * 1000
     valid_files = [f if start_ts <= getctime(
@@ -113,6 +114,7 @@ while st_date <= lst_date:
     if len(valid_files) > 0:
         data_found = True
         main_flist[_st_date] = valid_files
+        all_files += valid_files
         if first:
             print(_st_date, end = '')
             first = False
@@ -158,7 +160,7 @@ def get_lines(wl):
 
 
 # %% Wavelengths
-wls = [557.7, 630.0, 427.8, 486.1, 656.3]
+wls = [486.1] # , 630.0, 427.8, 486.1, 656.3]
 # %% Test image
 idx = np.random.randint(0, high=len(flist))
 img = np.asarray(pf.open(flist[idx])[1].data, dtype=float)
@@ -335,6 +337,24 @@ def get_imgs_from_files(flist, wl):
 
     return (imgdata, expdata, tdata)
 
+# %%
+encoding = {'imgs': {'dtype': float, 'zlib': True},
+            'exposure': {'dtype': float, 'zlib': True}}
+imgdata, expdata, tdata = get_imgs_from_files(all_files, wls[0])
+ds = xr.Dataset(
+            data_vars=dict(
+                imgs=(['tstamp', 'height', 'wl'], imgdata),
+                exposure=(['tstamp'], expdata)
+            ),
+            coords=dict(tstamp=tdata),
+            attrs=dict(wl=wls[0])
+        )
+fname = 'hitmis_night_%04d.nc'%(wls[0] * 10)
+print('Saving %s...\t' % (fname), end='')
+sys.stdout.flush()
+ds.to_netcdf(destdir + '/' + fname, encoding=encoding)
+print('Done.')
+sys.exit(0)
 
 # %% Save NC files
 encoding = {'imgs': {'dtype': float, 'zlib': True},
