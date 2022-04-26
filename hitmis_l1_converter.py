@@ -168,7 +168,7 @@ def get_lines(wl):
 
 
 # %% Wavelengths
-wls = [486.1] # , 630.0, 427.8, 486.1, 656.3]
+wls = [486.1, 630.0, 427.8, 486.1, 656.3]
 # %% Test image
 idx = np.random.randint(0, high=len(flist))
 img = np.asarray(pf.open(flist[idx])[1].data, dtype=float)
