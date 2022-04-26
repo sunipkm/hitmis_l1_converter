@@ -125,6 +125,14 @@ if not data_found:
     print('None')
 print('\n')
 
+# %% Define resolution function
+resolutions = {}
+ifile = open('hitmis_resolution.txt')
+for line in ifile:
+    words = line.rstrip('\n').split()
+    resolutions[float(words[0])] = [float(w) for w in words[1:]]
+ifile.close()
+
 # %% Define ROI function
 roidict = {}
 
@@ -338,23 +346,23 @@ def get_imgs_from_files(flist, wl):
     return (imgdata, expdata, tdata)
 
 # %%
-encoding = {'imgs': {'dtype': float, 'zlib': True},
-            'exposure': {'dtype': float, 'zlib': True}}
-imgdata, expdata, tdata = get_imgs_from_files(all_files, wls[0])
-ds = xr.Dataset(
-            data_vars=dict(
-                imgs=(['tstamp', 'height', 'wl'], imgdata),
-                exposure=(['tstamp'], expdata)
-            ),
-            coords=dict(tstamp=tdata),
-            attrs=dict(wl=wls[0])
-        )
-fname = 'hitmis_night_%04d.nc'%(wls[0] * 10)
-print('Saving %s...\t' % (fname), end='')
-sys.stdout.flush()
-ds.to_netcdf(destdir + '/' + fname, encoding=encoding)
-print('Done.')
-sys.exit(0)
+# encoding = {'imgs': {'dtype': float, 'zlib': True},
+#             'exposure': {'dtype': float, 'zlib': True}}
+# imgdata, expdata, tdata = get_imgs_from_files(all_files, wls[0])
+# ds = xr.Dataset(
+#             data_vars=dict(
+#                 imgs=(['tstamp', 'height', 'wl'], imgdata),
+#                 exposure=(['tstamp'], expdata)
+#             ),
+#             coords=dict(tstamp=tdata),
+#             attrs=dict(wl=wls[0])
+#         )
+# fname = 'hitmis_night_%04d.nc'%(wls[0] * 10)
+# print('Saving %s...\t' % (fname), end='')
+# sys.stdout.flush()
+# ds.to_netcdf(destdir + '/' + fname, encoding=encoding)
+# print('Done.')
+# sys.exit(0)
 
 # %% Save NC files
 encoding = {'imgs': {'dtype': float, 'zlib': True},
@@ -373,15 +381,18 @@ for key in main_flist.keys():
         tdelta = datetime.datetime.now().timestamp() - tstart
         print(' ' * os.get_terminal_size()[0], end='')
         print('[%.1f] Conversion time: %s' % (w, tdelta_to_hms(tdelta)))
+        wl_ax = np.arange(imgdata[0].shape[-1]) * resolutions[w][0] + resolutions[w][1]
         ds = xr.Dataset(
             data_vars=dict(
                 imgs=(['tstamp', 'height', 'wl'], imgdata),
                 exposure=(['tstamp'], expdata)
             ),
-            coords=dict(tstamp=tdata),
+            coords=dict(tstamp=tdata, wl=wl_ax),
             attrs=dict(wl=w)
         )
         print('Saving %s...\t' % (fname), end='')
         sys.stdout.flush()
         ds.to_netcdf(destdir + '/' + fname, encoding=encoding)
         print('Done.')
+
+# %%

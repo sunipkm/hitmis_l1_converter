@@ -5,7 +5,7 @@ import os
 import sys
 import glob
 # %%
-flist = glob.glob('/home/locsst/codes/hitmis_l1_converter/hitmis_night*.nc')
+flist = glob.glob('./hitmis_night*.nc')
 def getWave(f):
     return int(f.split('hitmis_night_')[1].split('.nc')[0])
 flist.sort(key=getWave)
