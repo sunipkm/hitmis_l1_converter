@@ -101,10 +101,10 @@ first = True
 while st_date <= lst_date:
     _st_date = st_date
     start = datetime.datetime(
-        st_date.year, st_date.month, st_date.day, 20, 0, 0)
+        st_date.year, st_date.month, st_date.day, 6, 0, 0)
     st_date += datetime.timedelta(days=1)
     stop = datetime.datetime(
-        st_date.year, st_date.month, st_date.day, 3, 30, 00)
+        st_date.year, st_date.month, st_date.day, 18, 00, 00)
     start_ts = start.timestamp() * 1000
     stop_ts = stop.timestamp() * 1000
     valid_files = [f if start_ts <= getctime(
