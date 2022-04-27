@@ -435,7 +435,7 @@ for key in main_flist.keys():
                 data_vars=dict(
                     imgs=(['tstamp', 'height', 'wl'], imgs)
                 ),
-                coords=dict(tstamp=ts, wl=ds['wl'])
+                coords=dict(tstamp=ts, wl=wl_ax)
         )
         print('Saving %s...\t' % (fname), end='')
         sys.stdout.flush()
