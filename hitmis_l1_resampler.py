@@ -399,7 +399,7 @@ for key in main_flist.keys():
         ts = []
         imgs = []
         count = 0
-        print(len(ds['tstamp']))
+        str_len = 0
         while end.timestamp() < ds['tstamp'][-1]:
             # resample
             slc = slice(start.timestamp(), end.timestamp())
@@ -413,9 +413,17 @@ for key in main_flist.keys():
                 ts.append(start.timestamp())
                 imgs.append(data)
                 count += 1
-                print(end, count)
+                p_str = '%s %d'%(str(end), count)
+                if str_len:
+                    print(' '*str_len, end = '\r')
+                print('%s'%(p_str), end = '\r')
+                str_len = len(p_str)
             else:
-                print(end)
+                p_str = '%s: No files'%(str(end))
+                if str_len:
+                    print(' '*str_len, end = '\r')
+                print('%s'%(p_str), end = '\r')
+                str_len = len(p_str)
                 start += datetime.timedelta(0, 120)
             #update
             start += datetime.timedelta(0, 120)
@@ -431,7 +439,7 @@ for key in main_flist.keys():
         )
         print('Saving %s...\t' % (fname), end='')
         sys.stdout.flush()
-        ds.to_netcdf(destdir + '/' + fname, encoding=encoding)
+        nds.to_netcdf(destdir + '/' + fname, encoding=encoding)
         print('Done.')
 
 # %%
