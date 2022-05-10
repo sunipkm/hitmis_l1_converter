@@ -332,7 +332,9 @@ def get_imgs_from_files(flist, wl):
             continue
         fimg = _fimg[1]
         try:
-            data = straighten_image(np.asarray(fimg.data, dtype=float), wl)[0]
+            data = np.asarray(fimg.data, dtype=float)
+            data -= np.average(data[950:, 100:])
+            data = straighten_image(data, wl)[0]
         except Exception as e:
             print('Exception %s on file %s' % (str(e), fname))
             continue
