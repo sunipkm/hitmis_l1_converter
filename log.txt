@@ -1,0 +1,13 @@
+Files are being stored in:
+	/home/sunip/share/hitmis_locsst
+
+Traceback (most recent call last):
+  File "hitmis_l1_resampler.py", line 78, in <module>
+    f = glob.glob(d+'/*.fit')
+  File "/opt/anaconda3/lib/python3.8/glob.py", line 21, in glob
+    return list(iglob(pathname, recursive=recursive))
+  File "/opt/anaconda3/lib/python3.8/glob.py", line 75, in _iglob
+    yield os.path.join(dirname, name)
+  File "/opt/anaconda3/lib/python3.8/posixpath.py", line 82, in join
+    for b in map(os.fspath, p):
+KeyboardInterrupt

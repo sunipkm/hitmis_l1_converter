@@ -1,4 +1,6 @@
 # %% Imports
+from functools import partial
+import gc
 import os
 import sys
 import glob
@@ -7,8 +9,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from skimage import transform
+from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
+import lzma
+import pickle
 import datetime
 import argparse
+import uncertainties as un
+from uncertainties import unumpy as unp
+from time import perf_counter_ns
 # %% Argument Parser
 parser = argparse.ArgumentParser(
     description='Convert HiT&MIS L0 data to L1 data, with exposure normalization and timestamp regularization (1 image for every 4 minutes), which separates data by filter region and performs line straightening using ROI listed in accompanying "hitmis_roi.csv" file, and edge lines in "edge_detection" directory. The program will not work without these files present.')
@@ -168,7 +177,7 @@ def get_lines(wl):
 
 
 # %% Wavelengths
-wls = [486.1, 630.0, 427.8, 557.7, 656.3]
+wls = [486.1, 557.7, 630.0, 656.3]
 # %% Test image
 idx = np.random.randint(0, high=len(flist))
 img = np.asarray(pf.open(flist[idx])[1].data, dtype=float)
@@ -296,34 +305,124 @@ def tdelta_to_hms(tdelta):
     outstr += str(tdelta) + ' s'
     return outstr
 # %% Save straightened images, no other processing
+def get_imgs_from_files_single(idx, flist: list, wl: float, dark_bias: np.ndarray, dark_rate: np.ndarray, read_noise: float):
+    fname = flist[idx]
+    try:
+        _fimg = pf.open(fname)
+    except Exception as e:
+        print('Exception %s on file %s' % (str(e), fname))
+        return None
+    fimg = _fimg[1]
+    try:
+        data = np.asarray(fimg.data, dtype=float)
+        exposure = fimg.header['exposure_ms']*0.001
 
+        # data -= dark_data['bias'] + (dark_data['dark'] * exposure)
+        # start = perf_counter_ns()
+        # data = unp.uarray(data, np.sqrt(data)) # shot noise
+        # end = perf_counter_ns()
+        # print('data unp: %.3f us'%((end - start)*1e-3))
+        
+        # start = perf_counter_ns()
+        data = data - dark_bias # remove bias
+        std = np.sqrt(data + read_noise*read_noise) # standard deviation measure (Rp * t + Rd * t + Rd^2)
+        data = data - (dark_rate * exposure)
+        # end = perf_counter_ns()
+        # print('data sub: %.3f us'%((end - start)*1e-3))
 
-def get_imgs_from_files(flist, wl):
+        # start = perf_counter_ns()
+        # std = unp.std_devs(data)
+        # data = unp.nominal_values(data)
+        # end = perf_counter_ns()
+        # print('data break: %.3f us'%((end - start)*1e-3))
+
+        data -= np.average(data[950:, 100:])
+        # start = perf_counter_ns()
+        data = straighten_image(data, wl)[0]
+        std = straighten_image(std, wl)[0]
+        data[np.where(data < 0)] = 0
+        std[np.where(std < 0)] = 0
+
+        if wl == 557.7: # FOV adjust
+            data_ = np.zeros((408, data.shape[1]), dtype = float)
+            data_[36:,:] += data[:-10, :]
+            del data
+            data = data_
+            stdval_ = np.zeros((408, data.shape[1]), dtype = float)
+            stdval_[36:, :] += std[:-10, :]
+            del std
+            std = stdval_
+
+        elif wl == 486.1: # FOV adjust
+            data_ = np.zeros((425, data.shape[1]), dtype = float)
+            data_[:, :] += data[4:-2, :]
+            del data
+            data = data_
+            stdval_ = np.zeros((425, data.shape[1]), dtype = float)
+            stdval_[:, :] += std[4:-2, :]
+            del std
+            std = stdval_
+        # end = perf_counter_ns()
+        # print('data straighten: %.3f us'%((end - start)*1e-3))
+
+        # start = perf_counter_ns()
+        # std = np.sqrt(data) # straighten_image(std, wl)[0]
+        # end = perf_counter_ns()
+        # print('std straighten: %.3f us'%((end - start)*1e-3))
+
+        # start = perf_counter_ns()
+        # data = unp.uarray(data, std)
+        # end = perf_counter_ns()
+        # print('data pack: %.3f us'%((end - start)*1e-3))
+    except Exception as e:
+        print('Exception %s on file %s' % (str(e), fname))
+        _fimg.close()
+        return None
+
+    tstamp = fimg.header['timestamp']*0.001
+    return (data, std, tstamp, exposure)
+
+# %%
+def get_imgs_from_files(flist, wl, max_workers=12):
     num_frames = len(flist)
-    otstamp = None
-    tconsume = 0
     imgdata = []
+    stdata = []
     expdata = []
     tdata = []
 
-    for i in range(num_frames):
-        if otstamp is None:
-            otstamp = datetime.datetime.timestamp(datetime.datetime.now())
-        if (i + 1) % 20 == 0:
-            ctstamp = datetime.datetime.timestamp(datetime.datetime.now())
-            tdelta = ctstamp - otstamp
-            otstamp = ctstamp
-            tconsume += tdelta
-            ttot = ((num_frames - i - 2) * tdelta / 20) + tconsume
-            str_p1 = "%.1f [%d/%d]" % (wl, i + 1, num_frames)
-            str_p2 = "[%s/%s]" % (tdelta_to_hms(tconsume), tdelta_to_hms(ttot))
-            width = os.get_terminal_size().columns
-            n_spaces = width - len(str_p1) - len(str_p2)
-            if n_spaces <= 4:
-                print("%s\t%s" % (str_p1, str_p2))
-            else:
-                spaces = ' ' * n_spaces
-                print('%s%s%s' % (str_p1, spaces, str_p2), end='\r')
+    if get_imgs_from_files.dark_data is None:
+        with lzma.open('pixis_dark_bias.xz', 'rb') as dfile:
+            get_imgs_from_files.dark_data = pickle.load(dfile)
+            get_imgs_from_files.read_noise = np.median(get_imgs_from_files.dark_data['bias_std'])
+    dark_bias: np.ndarray = get_imgs_from_files.dark_data['bias'] # unp.uarray(dark_data['bias'], dark_data['bias_std'])
+    dark_rate = get_imgs_from_files.dark_data['dark'] # unp.uarray(dark_data['dark'], dark_data['dark_std'])
+    read_noise = get_imgs_from_files.read_noise
+
+    fun = partial(get_imgs_from_files_single, flist=flist, wl=wl, dark_bias=dark_bias, dark_rate=dark_rate, read_noise=read_noise)
+
+    res = thread_map(fun, range(num_frames), max_workers=max_workers)
+
+    for item in res:
+        if item is not None:
+            imgdata.append(item[0])
+            stdata.append(item[1])
+            tdata.append(item[2])
+            expdata.append(item[3])
+
+    del res
+    gc.collect()
+
+    return (imgdata, stdata, expdata, tdata)
+
+    if get_imgs_from_files.dark_data is None:
+        with lzma.open('pixis_dark_bias.xz', 'rb') as dfile:
+            get_imgs_from_files.dark_data = pickle.load(dfile)
+            get_imgs_from_files.read_noise = np.median(get_imgs_from_files.dark_data['bias_std'])
+    dark_bias: np.ndarray = get_imgs_from_files.dark_data['bias'] # unp.uarray(dark_data['bias'], dark_data['bias_std'])
+    dark_rate = get_imgs_from_files.dark_data['dark'] # unp.uarray(dark_data['dark'], dark_data['dark_std'])
+    read_noise = get_imgs_from_files.read_noise
+
+    for i in tqdm(range(num_frames)):
         fname = flist[i]
         try:
             _fimg = pf.open(fname)
@@ -333,19 +432,75 @@ def get_imgs_from_files(flist, wl):
         fimg = _fimg[1]
         try:
             data = np.asarray(fimg.data, dtype=float)
+            exposure = fimg.header['exposure_ms']*0.001
+
+            # data -= dark_data['bias'] + (dark_data['dark'] * exposure)
+            # start = perf_counter_ns()
+            # data = unp.uarray(data, np.sqrt(data)) # shot noise
+            # end = perf_counter_ns()
+            # print('data unp: %.3f us'%((end - start)*1e-3))
+            
+            # start = perf_counter_ns()
+            data = data - dark_bias # remove bias
+            std = np.sqrt(data + read_noise*read_noise) # standard deviation measure (Rp * t + Rd * t + Rd^2)
+            data = data - (dark_rate * exposure)
+            # end = perf_counter_ns()
+            # print('data sub: %.3f us'%((end - start)*1e-3))
+
+            # start = perf_counter_ns()
+            # std = unp.std_devs(data)
+            # data = unp.nominal_values(data)
+            # end = perf_counter_ns()
+            # print('data break: %.3f us'%((end - start)*1e-3))
+
             data -= np.average(data[950:, 100:])
+            # start = perf_counter_ns()
             data = straighten_image(data, wl)[0]
+            std = straighten_image(std, wl)[0]
+            data[np.where(data < 0)] = 0
+            std[np.where(std < 0)] = 0
+
+            if wl == 557.7: # FOV adjust
+                data_ = np.zeros((408, data.shape[1]), dtype = float)
+                data_[36:,:] += data[:-10, :]
+                data = data_
+                stdval_ = np.zeros((408, data.shape[1]), dtype = float)
+                stdval_[36:, :] += std[:-10, :]
+                std = stdval_
+
+            elif wl == 486.1: # FOV adjust
+                data_ = np.zeros((425, data.shape[1]), dtype = float)
+                data_[:, :] += data[4:-2, :]
+                data = data_
+                stdval_ = np.zeros((425, data.shape[1]), dtype = float)
+                stdval_[:, :] += std[4:-2, :]
+                std = stdval_
+            # end = perf_counter_ns()
+            # print('data straighten: %.3f us'%((end - start)*1e-3))
+
+            # start = perf_counter_ns()
+            # std = np.sqrt(data) # straighten_image(std, wl)[0]
+            # end = perf_counter_ns()
+            # print('std straighten: %.3f us'%((end - start)*1e-3))
+
+            # start = perf_counter_ns()
+            # data = unp.uarray(data, std)
+            # end = perf_counter_ns()
+            # print('data pack: %.3f us'%((end - start)*1e-3))
         except Exception as e:
             print('Exception %s on file %s' % (str(e), fname))
             continue
 
         tstamp = (fimg.header['timestamp']*0.001)
-        exposure = fimg.header['exposure_ms']*0.001
         imgdata.append(data)
+        stdata.append(std)
         tdata.append(tstamp)
         expdata.append(exposure)
 
-    return (imgdata, expdata, tdata)
+    return (imgdata, stdata, expdata, tdata)
+
+get_imgs_from_files.dark_data = None
+get_imgs_from_files.read_noise = None
 
 # %%
 # encoding = {'imgs': {'dtype': float, 'zlib': True},
@@ -368,6 +523,7 @@ def get_imgs_from_files(flist, wl):
 
 # %% Save NC files
 encoding = {'imgs': {'dtype': float, 'zlib': True},
+            'stds': {'dtype': float, 'zlib': True},
             'exposure': {'dtype': float, 'zlib': True}}
 for key in main_flist.keys():
     filelist = main_flist[key]
@@ -379,14 +535,18 @@ for key in main_flist.keys():
             print('File %s exists' % (fname))
             continue
         tstart = datetime.datetime.now().timestamp()
-        imgdata, expdata, tdata = get_imgs_from_files(filelist, w)
+        imgdata, stdata, expdata, tdata = get_imgs_from_files(filelist, w)
         tdelta = datetime.datetime.now().timestamp() - tstart
-        print(' ' * os.get_terminal_size()[0], end='')
+        try:
+            print(' ' * os.get_terminal_size()[0], end='')
+        except OSError:
+            print(' ' * 80, end = '')
         print('[%.1f] Conversion time: %s' % (w, tdelta_to_hms(tdelta)))
         wl_ax = np.arange(imgdata[0].shape[-1]) * resolutions[w][0] + resolutions[w][1]
         ds = xr.Dataset(
             data_vars=dict(
                 imgs=(['tstamp', 'height', 'wl'], imgdata),
+                stds=(['tstamp', 'height', 'wl'], stdata),
                 exposure=(['tstamp'], expdata)
             ),
             coords=dict(tstamp=tdata, wl=wl_ax),
@@ -396,10 +556,13 @@ for key in main_flist.keys():
         start = datetime.datetime.fromtimestamp(tdata[0])
         end = start + datetime.timedelta(0, 240)
         del imgdata
+        del stdata
         del expdata
         del tdata
+        gc.collect()
         ts = []
         imgs = []
+        stdvals = []
         count = 0
         str_len = 0
         while end.timestamp() < ds['tstamp'][-1]:
@@ -407,13 +570,22 @@ for key in main_flist.keys():
             slc = slice(start.timestamp(), end.timestamp())
             exps = ds.loc[dict(tstamp=slc)]['exposure']
             if exps is not None and len(exps) != 0:
-                data = ds.loc[dict(tstamp=slc)]['imgs']
-                data /= exps
-                data = np.average(data, axis = 0)
+                data: np.ndarray = ds.loc[dict(tstamp=slc)]['imgs']
+                std: np.ndarray = ds.loc[dict(tstamp=slc)]['stds']
+                # std = np.sqrt(data)
+                data = data.sum(axis=0) # all counts
+                std = np.sqrt((std**2).sum(axis=0))
+                texp = exps.sum() # total exposure
+                std = std / texp
+                data = data / texp
+                # stdev = np.std(data, axis = 0)
+                # data = np.average(data, axis = 0)
+                # data = data.mean(axis=0)
                 # save
                 start += datetime.timedelta(0, 120)
                 ts.append(start.timestamp())
                 imgs.append(data)
+                stdvals.append(std)
                 count += 1
                 p_str = '%s %d'%(str(end), count)
                 if str_len:
@@ -431,17 +603,32 @@ for key in main_flist.keys():
             start += datetime.timedelta(0, 120)
             end += datetime.timedelta(0, 240)
         del ds
+        gc.collect()
+        imgs = np.asarray(imgs)
+        stdvals = np.asarray(stdvals)
         print('Final:', len(imgs), len(ts))
-        encoding = {'imgs': {'dtype': float, 'zlib': True}}
+        encoding = {'imgs': {'dtype': float, 'zlib': True}, 'stds': {'dtype': float, 'zlib': True}}
         nds = xr.Dataset(
                 data_vars=dict(
-                    imgs=(['tstamp', 'height', 'wl'], imgs)
+                    imgs=(['tstamp', 'height', 'wl'], imgs),
+                    stds=(['tstamp', 'height', 'wl'], stdvals),
                 ),
                 coords=dict(tstamp=ts, wl=wl_ax)
         )
         print('Saving %s...\t' % (fname), end='')
         sys.stdout.flush()
         nds.to_netcdf(destdir + '/' + fname, encoding=encoding)
+        del nds
+        del ts
+        del wl_ax
+        del imgs
+        del stdvals
+        gc.collect()
         print('Done.')
+        print('-' * os.get_terminal_size().columns)
+        print('')
+    print('')
+    print('+' * os.get_terminal_size().columns)
+    print('')
 
 # %%
